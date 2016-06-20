@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 Freescale Semiconductor, Inc.
+ * Copyright (C) 2015-2016 Freescale Semiconductor, Inc.
  *
  * The code contained herein is licensed under the GNU General Public
  * License. You may obtain a copy of the GNU General Public License
@@ -25,6 +25,9 @@
 #include <linux/mfd/syscon.h>
 #include "../codecs/wm8960.h"
 #include "fsl_sai.h"
+#ifdef CONFIG_SWITCH
+#include <linux/switch.h>
+#endif
 
 #define DAI_NAME_SIZE	32
 
@@ -51,6 +54,9 @@ struct imx_priv {
 	struct platform_device *pdev;
 	struct platform_device *asrc_pdev;
 	struct snd_card *snd_card;
+#ifdef CONFIG_SWITCH
+	struct switch_dev sdev;
+#endif
 };
 
 static struct imx_priv card_priv;
@@ -87,6 +93,9 @@ static int hp_set_status_check(void)
 	}
 
 	if (hp_status != priv->hp_active_low) {
+#ifdef CONFIG_SWITCH
+		switch_set_state(&priv->sdev, 2);
+#endif
 		snprintf(buf, 32, "STATE=%d", 2);
 		snd_soc_dapm_disable_pin(&priv->codec->dapm, "Ext Spk");
 		snd_soc_dapm_disable_pin(&priv->codec->dapm, "Main MIC");
@@ -100,6 +109,9 @@ static int hp_set_status_check(void)
 
 		snd_kctl_jack_report(priv->snd_card, priv->headset_kctl, 1);
 	} else {
+#ifdef CONFIG_SWITCH
+		switch_set_state(&priv->sdev, 0);
+#endif
 		snprintf(buf, 32, "STATE=%d", 0);
 		snd_soc_dapm_enable_pin(&priv->codec->dapm, "Ext Spk");
 		snd_soc_dapm_enable_pin(&priv->codec->dapm, "Main MIC");
@@ -631,6 +643,15 @@ static int imx_wm8960_probe(struct platform_device *pdev)
 
 	data->card.late_probe = imx_wm8960_late_probe;
 
+#ifdef CONFIG_SWITCH
+	priv->sdev.name = "h2w";
+	ret = switch_dev_register(&priv->sdev);
+	if (ret < 0) {
+		dev_err(&pdev->dev, "switch_dev_register failed (%d)\n", ret);
+		goto fail;
+	}
+#endif
+
 	platform_set_drvdata(pdev, &data->card);
 	snd_soc_card_set_drvdata(&data->card, data);
 	ret = devm_snd_soc_register_card(&pdev->dev, &data->card);
@@ -664,6 +685,12 @@ static int imx_wm8960_probe(struct platform_device *pdev)
 			dev_err(&pdev->dev, "create mic attr failed (%d)\n", ret);
 			goto fail;
 		}
+	}
+
+	ret = snd_device_register(data->card.snd_card, imx_hp_set.jack);
+	if (ret) {
+			dev_err(&pdev->dev, "snd_device_register (%d)\n", ret);
+			goto fail;
 	}
 fail:
 	if (cpu_np)
